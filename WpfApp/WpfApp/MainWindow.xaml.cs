@@ -1,10 +1,11 @@
 ﻿using System;
-using System.Runtime.InteropServices;
+using System.IO;
+using System.Net.Sockets;
 using System.Text;
 using System.Windows;
-using Microsoft.Win32.SafeHandles;
+using System.Windows.Controls;
 
-namespace DriverCommunicator
+namespace AgentApp
 {
     public partial class MainWindow : Window
     {
@@ -13,90 +14,69 @@ namespace DriverCommunicator
             InitializeComponent();
         }
 
+        private void BrowseButton_Click(object sender, RoutedEventArgs e)
+        {
+            // Open file dialog to select a file
+            var dialog = new Microsoft.Win32.OpenFileDialog();
+            dialog.Filter = "Text Files (*.txt)|*.txt|PNG Images (*.png)|*.png|JPEG Images (*.jpeg)|*.jpeg";
+
+            if (dialog.ShowDialog() == true)
+            {
+                FilePathTextBox.Text = dialog.FileName;
+            }
+        }
+
         private void SendButton_Click(object sender, RoutedEventArgs e)
         {
-            string message = InputTextBox.Text;
-            if (string.IsNullOrEmpty(message))
+            // Retrieve selected file extension and path
+            string selectedExtension = (FileExtensionComboBox.SelectedItem as ComboBoxItem)?.Content.ToString();
+            string filePath = FilePathTextBox.Text;
+
+            // Validate inputs
+            if (string.IsNullOrEmpty(selectedExtension) || string.IsNullOrEmpty(filePath))
             {
-                MessageBox.Show("Please enter a message to send to the driver.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                StatusTextBlock.Text = "Please select a file extension and path.";
+                return;
+            }
+
+            if (!filePath.EndsWith(selectedExtension, StringComparison.OrdinalIgnoreCase))
+            {
+                StatusTextBlock.Text = "File extension and path do not match.";
                 return;
             }
 
             try
             {
-                string response = CommunicateWithDriver(message);
-                ResponseTextBox.Text = response;
+                // Send data to server
+                SendDataToServer($"GET_FILES|EXT={selectedExtension}|PATH={filePath}");
+                StatusTextBlock.Text = "Data sent successfully.";
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Failed to communicate with the driver.\n{ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                StatusTextBlock.Text = $"Error: {ex.Message}";
             }
         }
 
-        private string CommunicateWithDriver(string message)
+        private void SendDataToServer(string data)
         {
-            const string devicePath = @"\\.\MyDevice";
-            const uint SIOCTL_TYPE = 40000;
-            const uint METHOD_BUFFERED = 0;
-            const uint FILE_READ_DATA = 0x0001;
-            const uint FILE_WRITE_DATA = 0x0002;
+            // Define server connection details
+            const string serverAddress = "127.0.0.1";
+            const int serverPort = 8080;
 
-            uint IOCTL_HELLO = (SIOCTL_TYPE << 16) | (FILE_READ_DATA | FILE_WRITE_DATA) << 14 | 0x800 << 2 | METHOD_BUFFERED;
-
-            byte[] inputBuffer = Encoding.ASCII.GetBytes(message);
-            byte[] outputBuffer = new byte[256];
-
-            using (SafeFileHandle handle = CreateFile(
-                devicePath,
-                FILE_READ_DATA | FILE_WRITE_DATA,
-                0,
-                IntPtr.Zero,
-                3, // OPEN_EXISTING
-                0,
-                IntPtr.Zero))
+            // Connect to the server and send data
+            using (TcpClient client = new TcpClient(serverAddress, serverPort))
+            using (NetworkStream stream = client.GetStream())
             {
-                if (handle.IsInvalid)
-                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+                byte[] message = Encoding.UTF8.GetBytes(data);
+                stream.Write(message, 0, message.Length);
 
-                uint bytesReturned;
-                if (DeviceIoControl(
-                    handle,
-                    IOCTL_HELLO,
-                    inputBuffer,
-                    (uint)inputBuffer.Length,
-                    outputBuffer,
-                    (uint)outputBuffer.Length,
-                    out bytesReturned,
-                    IntPtr.Zero))
-                {
-                    return Encoding.ASCII.GetString(outputBuffer, 0, (int)bytesReturned);
-                }
-                else
-                {
-                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
-                }
+                // Receive server response
+                byte[] buffer = new byte[1024];
+                int bytesRead = stream.Read(buffer, 0, buffer.Length);
+                string response = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+
+                MessageBox.Show($"Server Response: {response}", "Response");
             }
         }
-
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
-        private static extern SafeFileHandle CreateFile(
-            string lpFileName,
-            uint dwDesiredAccess,
-            uint dwShareMode,
-            IntPtr lpSecurityAttributes,
-            uint dwCreationDisposition,
-            uint dwFlagsAndAttributes,
-            IntPtr hTemplateFile);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool DeviceIoControl(
-            SafeFileHandle hDevice,
-            uint dwIoControlCode,
-            byte[] lpInBuffer,
-            uint nInBufferSize,
-            byte[] lpOutBuffer,
-            uint nOutBufferSize,
-            out uint lpBytesReturned,
-            IntPtr lpOverlapped);
     }
 }
